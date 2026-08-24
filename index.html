@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <!-- Fullscreen/Kiosk mode meta tags -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>JAYA SUPERSTORE - Price Checker</title>
+    <link rel="stylesheet" href="css/pricechecker.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Header - Hidden by default, toggle with button -->
+    <header class="header" id="header" style="display: none;">
+        <div class="header-content">
+            <div class="logo">
+                <i class="fas fa-shopping-cart"></i>
+                <h1>JAYA SUPERSTORE</h1>
+            </div>
+            <div class="header-controls">
+                <div class="tagline">Price Checker System</div>
+                <div class="manual-input">
+                    <input type="text" 
+                           id="manualInput" 
+                           placeholder="Type item code for testing..." 
+                           autocomplete="off">
+                    <button onclick="searchManual()" class="search-btn">
+                        <i class="fas fa-search"></i> Search
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Toggle Header Button -->
+    <button id="toggleHeaderBtn" class="toggle-header-btn" onclick="toggleHeader()" style="position: fixed; top: 10px; right: 10px; z-index: 1001; padding: 12px 20px; background: #2563eb; color: white; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.2); font-size: 14px; font-weight: 600; transition: all 0.3s ease;">
+        <i class="fas fa-search"></i> Search
+    </button>
+
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Slideshow Section -->
+        <div class="slideshow-container" id="slideshowContainer">
+            <!-- Slides will be loaded dynamically by JavaScript -->
+            <div class="loading-slides" style="display: flex; justify-content: center; align-items: center; height: 400px; color: #666;">
+                <i class="fas fa-circle-notch fa-spin fa-2x"></i>
+                <span style="margin-left: 15px; font-size: 1.1em;">Loading slides...</span>
+            </div>
+        </div>
+
+        <!-- Price Display Section -->
+        <div class="price-display" id="priceDisplay" style="display: none;">
+            <div class="product-card">
+                <!-- Product Header -->
+                <div class="product-header">
+                    <div class="product-code">
+                        <span class="label">Item Code:</span>
+                        <span class="value" id="itemCode">-</span>
+                    </div>
+                    <div class="barcode-display">
+                        <i class="fas fa-barcode"></i>
+                        <span id="barcodeDisplay">-</span>
+                    </div>
+                </div>
+
+                <!-- Product Image & Info -->
+                <div class="product-content">
+                    <div class="product-image-section">
+                        <div class="image-wrapper">
+                            <img id="productImage" src="products/none.png" alt="Product">
+                            <div class="stock-badge" id="stockBadge">
+                                <i class="fas fa-box"></i>
+                                <span id="stockQty">0</span> <span id="stockUOM">Unit</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="product-details">
+                        <!-- Product Name -->
+                        <h2 class="product-name" id="productName">-</h2>
+                        
+                        <!-- Article Code -->
+                        <div class="article-code">
+                            <span class="label">Article Code:</span>
+                            <span class="value" id="articleCode">-</span>
+                        </div>
+
+                        <!-- Location Badge -->
+                        <div class="location-badge">
+                            <i class="fas fa-map-marker-alt"></i>
+                            <span id="locationDisplay">-</span>
+                        </div>
+
+                        <!-- Price Section -->
+                        <div class="price-section">
+                            <!-- Normal Price -->
+                            <div class="price-box normal-price" id="normalPriceBox">
+                                <div class="price-label">Normal Price</div>
+                                <div class="price-value">
+                                    RM <span id="normalPrice">0.00</span>
+                                    <span class="price-uom">/ <span id="normalUOM">Unit</span></span>
+                                </div>
+                            </div>
+
+<!-- Promo Price -->
+<div class="price-box promo-price" id="promoPriceBox" style="display: none;">
+    <div class="promo-badge">
+        <i class="fas fa-fire"></i> SPECIAL PROMO
+    </div>
+    <div class="price-label">Promo Price</div>
+    <div class="price-value">
+        RM <span id="promoPrice">0.00</span>
+        <span class="price-uom">/ <span id="promoUOM">Unit</span></span>
+    </div>
+    <div class="promo-savings">
+        Save RM <span id="savingsAmount">0.00</span>
+    </div>
+    <!-- NEW: Promotion Quantity Requirement Display -->
+    <div class="promo-quantity" id="promoQuantity" style="display: none; margin-top: 10px; padding: 8px 12px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px; font-size: 0.95em; color: #856404;">
+        <i class="fas fa-shopping-cart" style="margin-right: 8px;"></i>
+        <span id="promoQtyText">Min. Buy: 3 units</span>
+    </div>
+</div>
+
+                            <!-- Member Price -->
+                            <div class="price-box member-price" id="memberPriceBox" style="display: none;">
+                                <div class="member-badge">
+                                    <i class="fas fa-medal tier-gold"></i> MEMBER EXCLUSIVE
+                                </div>
+                                <div class="price-label">Member Price</div>
+                                
+                                <!-- Unit Price -->
+                                <div class="price-value" style="font-size: 1.5rem; opacity: 0.8; margin-bottom: 8px;">
+                                    RM <span id="memberPrice">0.00</span>
+                                    <span class="price-uom" style="font-size: 0.9rem;">/ <span id="memberUOM">Unit</span></span>
+                                </div>
+                                
+                                <!-- Total Price for Min Qty -->
+                                <div class="price-value" style="margin-top: 8px; padding-top: 8px; border-top: 2px dashed rgba(37, 99, 235, 0.3);">
+                                    RM <span id="memberTotalPrice">0.00</span>
+                                    <span class="price-uom" style="font-size: 1rem;">for <span id="memberTotalQty">3</span> <span id="memberTotalUOM">Units</span></span>
+                                </div>
+                                
+                                <!-- Member Savings Display -->
+                                <div class="promo-savings" style="margin-top: 12px;">
+                                    Save RM <span id="memberSavingsAmount">0.00</span>
+                                </div>
+                                
+                                <!-- Member Quantity Requirement Display -->
+                                <div class="promo-quantity" id="memberQuantity" style="display: none; margin-top: 10px; padding: 8px 12px; background: rgba(255, 255, 255, 0.7); border-left: 4px solid #2563eb; border-radius: 4px; font-size: 0.95em; color: #1e40af;">
+                                    <i class="fas fa-shopping-cart" style="margin-right: 8px;"></i>
+                                    <span id="memberQtyText">Min. Buy: 3 units</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Promo Validity -->
+                        <div class="promo-validity" id="promoValidity" style="display: none;">
+                            <div class="validity-item">
+                                <i class="fas fa-calendar-check"></i>
+                                <span>Valid from: <strong id="validFrom">-</strong></span>
+                            </div>
+                            <div class="validity-item">
+                                <i class="fas fa-calendar-times"></i>
+                                <span>Valid until: <strong id="validUntil">-</strong></span>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- Footer Info -->
+                <div class="product-footer">
+                    <div class="footer-info">
+                        <i class="fas fa-info-circle"></i>
+                        <span>Scan another item to check price</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+            <div class="loading-spinner">
+                <i class="fas fa-circle-notch fa-spin fa-3x"></i>
+                <p>Loading product information...</p>
+            </div>
+        </div>
+
+        <!-- Error Message -->
+        <div class="error-message" id="errorMessage" style="display: none;">
+            <div class="error-content">
+                <i class="fas fa-exclamation-triangle"></i>
+                <h3>Product Not Found</h3>
+                <p>The scanned item could not be found in our system.</p>
+                <button onclick="resetDisplay()">Try Again</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>&copy; 2024 Jaya Superstore. All rights reserved.</p>
+    </footer>
+
+    <!-- Hidden input for barcode scanning -->
+    <input type="text" id="barcodeInput" style="position: absolute; opacity: 0; pointer-events: none;">
+    
+    <script src="js/pricechecker.js?v=1.7.3"></script>
+</body>
+</html>

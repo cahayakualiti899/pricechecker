@@ -1,0 +1,34 @@
+{
+  "version": "1.7.3",
+  "releaseDate": "2026-08-13",
+  "description": "Expired promotions no longer displayed; local offline slider; safer auto-update",
+  "changes": [
+    "Promotions are validated against their own FromDate/ToDate window, not just the API IsPromoValid flag",
+    "Promo quantity tier and member bulk tier suppressed when the promotion is not currently running",
+    "Fixed member bulk row selector (.price-value:nth-of-type(2) never matched, so the row could never be hidden)",
+    "Promo validity dates now cleared between scans instead of persisting onto the next item",
+    "Auto-update only applies strictly NEWER versions - no more downgrading a locally patched kiosk",
+    "Removed the always-true file-size comparison that re-pulled the GitHub copy on every check",
+    "Slider images load from the local images/slider/ folder so the display works with no internet"
+  ],
+  "files": {
+    "html": {
+      "url": "https://raw.githubusercontent.com/jayasuperstore/image/main/pricechecker/index.html",
+      "lastModified": "2026-08-13"
+    },
+    "javascript": {
+      "url": "https://raw.githubusercontent.com/jayasuperstore/image/main/pricechecker/js/pricechecker.js",
+      "lastModified": "2026-08-13"
+    },
+    "css": {
+      "url": "https://raw.githubusercontent.com/jayasuperstore/image/main/pricechecker/css/pricechecker.css",
+      "lastModified": "2026-08-13"
+    }
+  },
+  "minimumBrowserVersion": {
+    "chrome": "90",
+    "firefox": "88",
+    "safari": "14",
+    "edge": "90"
+  }
+}
