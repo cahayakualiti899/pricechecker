@@ -1,28 +1,26 @@
 {
-  "version": "1.7.3",
-  "releaseDate": "2026-08-13",
-  "description": "Expired promotions no longer displayed; local offline slider; safer auto-update",
+  "version": "1.8.1",
+  "releaseDate": "2026-08-25",
+  "description": "Central distribution via cahayakualiti899/pricechecker; location-prefixed slides per outlet",
   "changes": [
-    "Promotions are validated against their own FromDate/ToDate window, not just the API IsPromoValid flag",
-    "Promo quantity tier and member bulk tier suppressed when the promotion is not currently running",
-    "Fixed member bulk row selector (.price-value:nth-of-type(2) never matched, so the row could never be hidden)",
-    "Promo validity dates now cleared between scans instead of persisting onto the next item",
-    "Auto-update only applies strictly NEWER versions - no more downgrading a locally patched kiosk",
-    "Removed the always-true file-size comparison that re-pulled the GitHub copy on every check",
-    "Slider images load from the local images/slider/ folder so the display works with no internet"
+    "Distribution moved to github.com/cahayakualiti899/pricechecker (flat root layout)",
+    "Slides are location-prefixed: HQ_Slide1.jpg, TUARAN3_Slide1.jpg, ... - each kiosk asks its API /info for its outlet and loads only its own slides",
+    "Slide fallback chain: outlet slides -> chain-wide slide1.jpg -> local images/slider (offline)",
+    "Kiosk location cached in localStorage so outlet slides survive a brief API outage",
+    "Auto-update URLs point at the new repo; strictly-newer version rule unchanged"
   ],
   "files": {
     "html": {
-      "url": "https://raw.githubusercontent.com/jayasuperstore/image/main/pricechecker/index.html",
-      "lastModified": "2026-08-13"
+      "url": "https://raw.githubusercontent.com/cahayakualiti899/pricechecker/main/index.html",
+      "lastModified": "2026-08-25"
     },
     "javascript": {
-      "url": "https://raw.githubusercontent.com/jayasuperstore/image/main/pricechecker/js/pricechecker.js",
-      "lastModified": "2026-08-13"
+      "url": "https://raw.githubusercontent.com/cahayakualiti899/pricechecker/main/pricechecker.js",
+      "lastModified": "2026-08-25"
     },
     "css": {
-      "url": "https://raw.githubusercontent.com/jayasuperstore/image/main/pricechecker/css/pricechecker.css",
-      "lastModified": "2026-08-13"
+      "url": "https://raw.githubusercontent.com/cahayakualiti899/pricechecker/main/pricechecker.css",
+      "lastModified": "2026-08-25"
     }
   },
   "minimumBrowserVersion": {

@@ -22,12 +22,17 @@ const CONFIG = {
     //         standing member rate that is always available.
     MEMBER_PRICE_REQUIRES_ACTIVE_PROMO: true,
 
-    // Slider images - served locally from this site so the shelf display keeps
-    // working with no internet.
-    // Physical path: C:\inetpub\wwwroot\PriceChecker\images\slider\
-    // Files must be slide1.jpg, slide2.jpg, ... with NO gaps (detection stops
-    // at the first missing number).
-    SLIDES_BASE: 'images/slider/',
+    // ── Slider images ────────────────────────────────────────
+    // Central distribution repo (public, holds ONLY html/js/css/jpg - never
+    // credentials). Slides are LOCATION-PREFIXED so one repo drives every
+    // outlet: HQ_Slide1.jpg, TUARAN3_Slide1.jpg, TUARAN3_Slide2.jpg, ...
+    // The kiosk asks its own API (/info) which outlet it is, then loads only
+    // that location's slides. Loading order per outlet:
+    //   1. {LOCATION}_Slide{n}.jpg from the repo  (outlet-specific)
+    //   2. slide{n}.jpg from the repo             (chain-wide default)
+    //   3. images/slider/slide{n}.jpg locally     (offline fallback)
+    SLIDES_REMOTE: 'https://raw.githubusercontent.com/cahayakualiti899/pricechecker/main/',
+    SLIDES_LOCAL: 'images/slider/',
     SLIDE_PREFIX: 'slide',
     SLIDE_EXT: '.jpg',
     MAX_SLIDES: 20,
@@ -39,12 +44,14 @@ const CONFIG = {
     AUTO_UPDATE: {
         ENABLED: true,
         CHECK_INTERVAL: 300000,
+        // Distribution repo uses a FLAT layout at the root (matches what is
+        // pushed to github.com/cahayakualiti899/pricechecker).
         FILES: {
-            HTML: 'https://raw.githubusercontent.com/jayasuperstore/image/main/pricechecker/index.html',
-            JS:   'https://raw.githubusercontent.com/jayasuperstore/image/main/pricechecker/js/pricechecker.js',
-            CSS:  'https://raw.githubusercontent.com/jayasuperstore/image/main/pricechecker/css/pricechecker.css'
+            HTML: 'https://raw.githubusercontent.com/cahayakualiti899/pricechecker/main/index.html',
+            JS:   'https://raw.githubusercontent.com/cahayakualiti899/pricechecker/main/pricechecker.js',
+            CSS:  'https://raw.githubusercontent.com/cahayakualiti899/pricechecker/main/pricechecker.css'
         },
-        VERSION_URL: 'https://raw.githubusercontent.com/jayasuperstore/image/main/pricechecker/version.json'
+        VERSION_URL: 'https://raw.githubusercontent.com/cahayakualiti899/pricechecker/main/version.json'
     },
 
     IP_CONFIG_FILE: 'ip.json' // ⬅ new
@@ -90,8 +97,9 @@ const state = {
     barcodeBuffer: '',
     barcodeTimeout: null,
     updateCheckInterval: null,
-    currentVersion: '1.7.3', // Increment this with each update
-    lastUpdateCheck: null
+    currentVersion: '1.8.1', // Increment this with each update
+    lastUpdateCheck: null,
+    kioskLocation: null      // outlet code from /api/pricechecker/info (e.g. TUARAN3)
 };
 
 // Initialize on page load
@@ -485,36 +493,94 @@ loadCachedContent();
 // ORIGINAL PRICE CHECKER FUNCTIONALITY
 // ============================================
 
-// Auto-detect available slides and build slideshow
-async function buildSlideshow() {
-    const baseImageUrl = CONFIG.SLIDES_BASE; // local folder - no internet required
-    const slideshowContainer = document.getElementById('slideshowContainer');
-    const maxSlides = CONFIG.MAX_SLIDES; // Maximum slides to check
-    const availableSlides = [];
+// ── Kiosk location (for location-prefixed slides) ──────────────
+// Asks this kiosk's own API which outlet it serves. Cached in memory and in
+// localStorage so slides still resolve to the right outlet if the API is
+// briefly down at page load. Returns null when the location cannot be learned.
+async function getKioskLocation() {
+    if (state.kioskLocation) return state.kioskLocation;
 
-    const slideName = (i) => `${CONFIG.SLIDE_PREFIX}${i}${CONFIG.SLIDE_EXT}`;
-
-    console.log(`Detecting available slides in "${baseImageUrl}"...`);
-
-    // Check slides sequentially
-    for (let i = 1; i <= maxSlides; i++) {
-        const imageUrl = `${baseImageUrl}${slideName(i)}`;
-        const exists = await checkImageExists(imageUrl);
-
-        if (exists) {
-            availableSlides.push(imageUrl);
-            console.log(`Found: ${slideName(i)}`);
-        } else {
-            // Stop checking after first missing slide
-            console.log(`${slideName(i)} not found, stopping detection`);
-            break;
+    try {
+        const res = await fetch(`${CONFIG.API_BASE_URL}/info`);
+        if (res.ok) {
+            const info = await res.json();
+            const loc = String(info.location || info.Location || '').trim().toUpperCase();
+            if (loc) {
+                state.kioskLocation = loc;
+                try { localStorage.setItem('kiosk_location', loc); } catch (e) { }
+                console.log(`Kiosk location from API: ${loc}`);
+                return loc;
+            }
         }
+    } catch (e) {
+        console.warn('Could not get kiosk location from API:', e.message);
     }
 
-    // If no slides found, default to slide1
+    // API unreachable: fall back to the last known location
+    try {
+        const cached = localStorage.getItem('kiosk_location');
+        if (cached) {
+            state.kioskLocation = cached;
+            console.log(`Kiosk location from cache: ${cached}`);
+            return cached;
+        }
+    } catch (e) { }
+
+    return null;
+}
+
+// Probe one slide slot under a base URL. `prefixes` lets outlet slides match
+// whatever casing was used when the file was uploaded (GitHub raw URLs are
+// case-sensitive): TUARAN3_Slide1.jpg, TUARAN3_SLIDE1.jpg, TUARAN3_slide1.jpg.
+async function findSlideAt(base, prefixes, i) {
+    for (const p of prefixes) {
+        const url = `${base}${p}${i}${CONFIG.SLIDE_EXT}`;
+        if (await checkImageExists(url)) return url;
+    }
+    return null;
+}
+
+// Collect sequential slides (1, 2, 3, ... stop at first gap) for one tier.
+async function collectSlides(base, prefixes) {
+    const found = [];
+    for (let i = 1; i <= CONFIG.MAX_SLIDES; i++) {
+        const url = await findSlideAt(base, prefixes, i);
+        if (!url) break;
+        found.push(url);
+    }
+    return found;
+}
+
+// Auto-detect available slides and build slideshow
+async function buildSlideshow() {
+    const slideshowContainer = document.getElementById('slideshowContainer');
+    let availableSlides = [];
+
+    // Tier 1: outlet-specific slides from the distribution repo
+    const loc = await getKioskLocation();
+    if (loc) {
+        console.log(`Looking for ${loc}_Slide1${CONFIG.SLIDE_EXT} ... in distribution repo`);
+        availableSlides = await collectSlides(CONFIG.SLIDES_REMOTE,
+            [`${loc}_Slide`, `${loc}_SLIDE`, `${loc}_slide`]);
+        if (availableSlides.length) console.log(`Using ${availableSlides.length} slide(s) for outlet ${loc}`);
+    }
+
+    // Tier 2: chain-wide default slides from the repo (unprefixed slide1.jpg...)
     if (availableSlides.length === 0) {
-        console.warn(`No slides found in "${baseImageUrl}" - check the folder exists and files are named ${slideName(1)}, ${slideName(2)}, ...`);
-        availableSlides.push(`${baseImageUrl}${slideName(1)}`);
+        availableSlides = await collectSlides(CONFIG.SLIDES_REMOTE, [CONFIG.SLIDE_PREFIX]);
+        if (availableSlides.length) console.log(`Using ${availableSlides.length} chain-wide slide(s) from repo`);
+    }
+
+    // Tier 3: local offline fallback (images/slider/slide1.jpg ...)
+    if (availableSlides.length === 0) {
+        availableSlides = await collectSlides(CONFIG.SLIDES_LOCAL, [CONFIG.SLIDE_PREFIX]);
+        if (availableSlides.length) console.log(`Offline: using ${availableSlides.length} local slide(s)`);
+    }
+
+    // Nothing anywhere: point at local slide1 so the layout stays intact
+    if (availableSlides.length === 0) {
+        console.warn('No slides found remotely or locally - showing placeholder slot.');
+        availableSlides.push(`${CONFIG.SLIDES_LOCAL}${CONFIG.SLIDE_PREFIX}1${CONFIG.SLIDE_EXT}`);
     }
     
     console.log(`Total slides detected: ${availableSlides.length}`);
@@ -1099,7 +1165,18 @@ function displayPricing(product) {
         console.log(`ℹ️ Member price RM ${formatPrice(memberPrice)} hidden - no promotion currently running (MEMBER_PRICE_REQUIRES_ACTIVE_PROMO).`);
     }
 
-    if (memberGateOpen && memberPrice > 0 && (!isPromoValid || !promoPrice || memberPrice < promoPrice)) {
+    // A member price must actually BE a saving. A stale promo row can carry a
+    // MemberPrice1 above the item's current normal price (promo entered when
+    // the normal price was higher, then the price dropped) - showing that as
+    // "MEMBER EXCLUSIVE ... Save RM -0.50" advertises paying MORE for being a
+    // member. Suppress it and flag the data problem in the console.
+    const memberIsARealDeal = memberPrice > 0 && memberPrice < normalPrice;
+
+    if (memberGateOpen && memberPrice > 0 && !memberIsARealDeal) {
+        console.warn(`🛑 Member price RM ${formatPrice(memberPrice)} is NOT below normal RM ${formatPrice(normalPrice)} - box suppressed. Check the promotion row for this item (stale member price?).`);
+    }
+
+    if (memberGateOpen && memberIsARealDeal && (!isPromoValid || !promoPrice || memberPrice < promoPrice)) {
         memberPriceBox.style.display = 'block';
         
         // Set member unit price
