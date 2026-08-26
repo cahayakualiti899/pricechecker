@@ -41,18 +41,13 @@ const CONFIG = {
     PRODUCT_IMAGE_BASE: 'https://raw.githubusercontent.com/jayasuperstore/image/main/products/',
     DEFAULT_IMAGE: 'https://raw.githubusercontent.com/jayasuperstore/image/main/products/none.png',
 
-    AUTO_UPDATE: {
-        ENABLED: true,
-        CHECK_INTERVAL: 300000,
-        // Distribution repo uses a FLAT layout at the root (matches what is
-        // pushed to github.com/cahayakualiti899/pricechecker).
-        FILES: {
-            HTML: 'https://raw.githubusercontent.com/cahayakualiti899/pricechecker/main/index.html',
-            JS:   'https://raw.githubusercontent.com/cahayakualiti899/pricechecker/main/pricechecker.js',
-            CSS:  'https://raw.githubusercontent.com/cahayakualiti899/pricechecker/main/pricechecker.css'
-        },
-        VERSION_URL: 'https://raw.githubusercontent.com/cahayakualiti899/pricechecker/main/version.json'
-    },
+    // File updates are pulled to DISK by the KioskUpdateService inside
+    // JayaWebApi on this host (the old in-page auto-update could never write
+    // to the IIS folder, so it never actually persisted anything). The page
+    // only polls its OWN local version.json and reloads once when the host's
+    // files have moved ahead of the running page.
+    VERSION_CHECK_INTERVAL: 300000,      // poll local version.json every 5 min
+    SLIDESHOW_REFRESH_INTERVAL: 1800000, // re-detect slides every 30 min
 
     IP_CONFIG_FILE: 'ip.json' // ⬅ new
 };
@@ -97,24 +92,23 @@ const state = {
     barcodeBuffer: '',
     barcodeTimeout: null,
     updateCheckInterval: null,
-    currentVersion: '1.8.1', // Increment this with each update
+    currentVersion: '1.8.3', // Increment this with each update
     lastUpdateCheck: null,
     kioskLocation: null      // outlet code from /api/pricechecker/info (e.g. TUARAN3)
 };
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', async function() {
-    console.log(`Price Checker v${state.currentVersion} - Auto Update System Enabled`);
+    console.log(`Price Checker v${state.currentVersion} - updates pulled by host service`);
 
     // 1) Load per-device API config from ip.json
     await loadIpConfig();
     
-    // Initialize auto-update system
-    if (CONFIG.AUTO_UPDATE.ENABLED) {
-        await initializeAutoUpdate();
-    }
-    
+    // Watch this host's local version.json (KioskUpdateService writes it)
+    initVersionWatch();
+
     await buildSlideshow(); // Build slideshow dynamically with auto-detection
+    initSlideshowRefresh(); // pick up newly uploaded slides without a manual reload
     initializeBarcodeScanner();
     setupEventListeners();
     setupManualInput();
@@ -126,63 +120,25 @@ document.addEventListener('DOMContentLoaded', async function() {
 });
 
 // ============================================
-// AUTO-UPDATE SYSTEM
+// VERSION WATCH
 // ============================================
-
-async function initializeAutoUpdate() {
-    console.log('Initializing auto-update system...');
-    
-    // Check for updates immediately on startup
-    await checkForUpdates();
-    
-    // Set up periodic update checks
-    if (CONFIG.AUTO_UPDATE.CHECK_INTERVAL > 0) {
-        state.updateCheckInterval = setInterval(async () => {
-            await checkForUpdates();
-        }, CONFIG.AUTO_UPDATE.CHECK_INTERVAL);
-        
-        console.log(`Auto-update check scheduled every ${CONFIG.AUTO_UPDATE.CHECK_INTERVAL / 1000} seconds`);
-    }
-}
-
-async function checkForUpdates() {
-    try {
-        console.log('Checking for updates from GitHub...');
-        state.lastUpdateCheck = new Date();
-        
-        // First, check version file if available
-        const hasNewVersion = await checkVersion();
-        
-        if (hasNewVersion) {
-            console.log('New version detected, updating files...');
-            await updateFiles();
-        } else {
-            // Fallback: Check file modifications by comparing content hashes
-            const needsUpdate = await checkFileChanges();
-            if (needsUpdate) {
-                console.log('File changes detected, updating...');
-                await updateFiles();
-            } else {
-                console.log('All files are up to date');
-            }
-        }
-        
-        // Update the UI to show last check time
-        updateLastCheckTime();
-        
-    } catch (error) {
-        console.error('Error checking for updates:', error);
-    }
-}
+// File updates are pulled to DISK by the KioskUpdateService that runs inside
+// JayaWebApi on this host - it polls the distribution repo and writes
+// js/css/html into this site's folder, version.json last as a commit marker.
+// The page's only job is to notice its host's files moved ahead and reload
+// ONCE. A reload loop is impossible: after reloading, the running version
+// equals the disk version.
+//
+// (The previous in-page auto-updater is gone. A browser page cannot write to
+// the IIS folder it was served from, so it never persisted anything; its
+// script hot-swap also died redeclaring `const CONFIG`. See KioskUpdateService.)
 
 // Compare two dotted version strings.
-// Returns 1 if a > b, -1 if a < b, 0 if equal. Missing segments count as 0,
-// so '1.7' and '1.7.0' compare equal.
+// Returns 1 if a > b, -1 if a < b, 0 if equal. Missing segments count as 0.
 function compareVersions(a, b) {
     const pa = String(a || '0').split('.').map(n => parseInt(n, 10) || 0);
     const pb = String(b || '0').split('.').map(n => parseInt(n, 10) || 0);
     const len = Math.max(pa.length, pb.length);
-
     for (let i = 0; i < len; i++) {
         const va = pa[i] || 0;
         const vb = pb[i] || 0;
@@ -192,302 +148,53 @@ function compareVersions(a, b) {
     return 0;
 }
 
-async function checkVersion() {
+async function checkLocalVersion() {
     try {
-        const response = await fetch(CONFIG.AUTO_UPDATE.VERSION_URL + '?t=' + Date.now(), {
-            cache: 'no-cache'
-        });
+        const res = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+        if (!res.ok) return;
 
-        if (response.ok) {
-            const versionData = await response.json();
-            console.log('Remote version:', versionData.version, 'Current version:', state.currentVersion);
+        const v = await res.json();
+        state.lastUpdateCheck = new Date();
+        updateLastCheckTime();
 
-            // Only update when the remote build is strictly NEWER.
-            // The previous check was `remote !== current`, which meant a locally
-            // patched kiosk running ahead of the repo would DOWNGRADE itself back
-            // to the older GitHub copy on the very next check - silently undoing
-            // any fix deployed straight to the machine.
-            if (versionData.version && compareVersions(versionData.version, state.currentVersion) > 0) {
-                console.log('Newer version available on GitHub - updating.');
-                return true;
-            }
-
-            if (versionData.version && compareVersions(versionData.version, state.currentVersion) < 0) {
-                console.log('This kiosk is NEWER than GitHub - staying put (no downgrade).');
-            }
+        if (v.version && compareVersions(v.version, state.currentVersion) > 0) {
+            console.log(`Host updated to v${v.version} (running v${state.currentVersion}) - reloading to pick it up.`);
+            window.location.reload();
         }
-    } catch (error) {
-        console.log('Version file not found or error reading it, falling back to content check');
-    }
-
-    return false;
-}
-
-async function checkFileChanges() {
-    try {
-        // Get current page's script content
-        const currentScript = document.querySelector('script[src*="pricechecker.js"]');
-        if (!currentScript) return false;
-        
-        // Fetch the latest JS file from GitHub
-        const response = await fetch(CONFIG.AUTO_UPDATE.FILES.JS + '?t=' + Date.now(), {
-            cache: 'no-cache'
-        });
-        
-        if (response.ok) {
-            const remoteContent = await response.text();
-
-            // REMOVED: the old size comparison
-            //     const currentSize = currentScript.innerHTML ? ... : 0;   // always 0
-            //     if (Math.abs(currentSize - remoteSize) > 100) return true;
-            // `currentScript` is an EXTERNAL <script src="...">, so .innerHTML is
-            // always '' and currentSize was always 0. Every single check therefore
-            // reported "changed" and re-pulled the GitHub copy over the local file
-            // on startup and every 5 minutes - which is how local fixes kept
-            // disappearing. Version comparison is the only reliable signal here.
-            const versionMatch = remoteContent.match(/currentVersion:\s*['"]([^'"]+)['"]/);
-
-            if (versionMatch) {
-                const remoteVersion = versionMatch[1];
-                if (compareVersions(remoteVersion, state.currentVersion) > 0) {
-                    console.log(`Remote script is newer (${remoteVersion} > ${state.currentVersion})`);
-                    return true;
-                }
-                console.log(`Remote script ${remoteVersion} is not newer than ${state.currentVersion} - skipping.`);
-            }
-        }
-    } catch (error) {
-        console.error('Error checking file changes:', error);
-    }
-    
-    return false;
-}
-
-async function updateFiles() {
-    try {
-        console.log('Starting file update process...');
-        
-        // Show update notification
-        showUpdateNotification('Updating application...');
-        
-        // Update JavaScript
-        await updateJavaScript();
-        
-        // Update CSS
-        await updateCSS();
-        
-        // Update HTML (this will reload the page)
-        await updateHTML();
-        
-    } catch (error) {
-        console.error('Error updating files:', error);
-        showUpdateNotification('Update failed. Please refresh manually.', 'error');
+    } catch (e) {
+        // version.json unreachable - try again next cycle
     }
 }
 
-async function updateJavaScript() {
-    try {
-        const response = await fetch(CONFIG.AUTO_UPDATE.FILES.JS + '?t=' + Date.now(), {
-            cache: 'no-cache'
-        });
-        
-        if (response.ok) {
-            const newScript = await response.text();
-            
-            // Store in localStorage for persistence
-            localStorage.setItem('pricechecker_js_content', newScript);
-            localStorage.setItem('pricechecker_js_updated', new Date().toISOString());
-            
-            console.log('JavaScript updated in localStorage');
-            
-            // Create a new script element with the updated code
-            const scriptElement = document.createElement('script');
-            scriptElement.textContent = newScript;
-            
-            // Remove old script and add new one
-            const oldScript = document.querySelector('script[src*="pricechecker.js"]');
-            if (oldScript) {
-                oldScript.remove();
-            }
-            
-            document.body.appendChild(scriptElement);
-            console.log('JavaScript hot-reloaded');
-        }
-    } catch (error) {
-        console.error('Error updating JavaScript:', error);
-        throw error;
-    }
+function initVersionWatch() {
+    checkLocalVersion();
+    state.updateCheckInterval = setInterval(checkLocalVersion, CONFIG.VERSION_CHECK_INTERVAL);
 }
 
-async function updateCSS() {
-    try {
-        const response = await fetch(CONFIG.AUTO_UPDATE.FILES.CSS + '?t=' + Date.now(), {
-            cache: 'no-cache'
-        });
-        
-        if (response.ok) {
-            const newCSS = await response.text();
-            
-            // Store in localStorage
-            localStorage.setItem('pricechecker_css_content', newCSS);
-            localStorage.setItem('pricechecker_css_updated', new Date().toISOString());
-            
-            // Hot-reload CSS
-            let styleElement = document.getElementById('dynamic-styles');
-            if (!styleElement) {
-                styleElement = document.createElement('style');
-                styleElement.id = 'dynamic-styles';
-                document.head.appendChild(styleElement);
-            }
-            
-            styleElement.textContent = newCSS;
-            console.log('CSS hot-reloaded');
-        }
-    } catch (error) {
-        console.error('Error updating CSS:', error);
-        // CSS update failure is not critical, continue
-    }
+// Re-detect slides periodically (only while the slideshow is on screen) so a
+// newly uploaded {LOCATION}_SlideN.jpg reaches long-running kiosks without a
+// manual refresh.
+function initSlideshowRefresh() {
+    setInterval(async () => {
+        const priceDisplay = document.getElementById('priceDisplay');
+        if (priceDisplay && priceDisplay.style.display === 'block') return; // mid-scan
+        console.log('Periodic slide re-detection...');
+        await buildSlideshow();
+    }, CONFIG.SLIDESHOW_REFRESH_INTERVAL);
 }
 
-async function updateHTML() {
-    try {
-        const response = await fetch(CONFIG.AUTO_UPDATE.FILES.HTML + '?t=' + Date.now(), {
-            cache: 'no-cache'
-        });
-        
-        if (response.ok) {
-            const newHTML = await response.text();
-            
-            // Store in localStorage
-            localStorage.setItem('pricechecker_html_content', newHTML);
-            localStorage.setItem('pricechecker_html_updated', new Date().toISOString());
-            
-            console.log('HTML updated in localStorage');
-            
-            // Schedule page reload after a short delay
-            showUpdateNotification('Update complete! Reloading...', 'success');
-            
-            setTimeout(() => {
-                // Clear cache and reload
-                if ('caches' in window) {
-                    caches.keys().then(names => {
-                        names.forEach(name => caches.delete(name));
-                    });
-                }
-                
-                // Force reload with cache bypass
-                window.location.reload(true);
-            }, 2000);
-        }
-    } catch (error) {
-        console.error('Error updating HTML:', error);
-        throw error;
-    }
-}
-
-function showUpdateNotification(message, type = 'info') {
-    // Remove existing notification if any
-    const existingNotification = document.getElementById('update-notification');
-    if (existingNotification) {
-        existingNotification.remove();
-    }
-    
-    // Create notification element
-    const notification = document.createElement('div');
-    notification.id = 'update-notification';
-    notification.style.cssText = `
-        position: fixed;
-        top: 20px;
-        left: 50%;
-        transform: translateX(-50%);
-        padding: 15px 30px;
-        background: ${type === 'error' ? '#dc2626' : type === 'success' ? '#10b981' : '#3b82f6'};
-        color: white;
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-        z-index: 10000;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        font-size: 14px;
-        font-weight: 600;
-        animation: slideDown 0.3s ease;
-    `;
-    
-    notification.innerHTML = `
-        <i class="fas ${type === 'error' ? 'fa-exclamation-triangle' : type === 'success' ? 'fa-check-circle' : 'fa-sync fa-spin'}" style="margin-right: 10px;"></i>
-        ${message}
-    `;
-    
-    document.body.appendChild(notification);
-    
-    // Add animation
-    const style = document.createElement('style');
-    style.textContent = `
-        @keyframes slideDown {
-            from {
-                opacity: 0;
-                transform: translateX(-50%) translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateX(-50%) translateY(0);
-            }
-        }
-    `;
-    document.head.appendChild(style);
-    
-    // Auto-remove after 5 seconds (except for reload notifications)
-    if (type !== 'success') {
-        setTimeout(() => {
-            if (notification.parentNode) {
-                notification.remove();
-            }
-        }, 5000);
-    }
-}
-
+// Small bottom-left indicator showing the running version and last file check.
 function updateLastCheckTime() {
-    // Create or update a small indicator showing last update check
     let indicator = document.getElementById('update-indicator');
     if (!indicator) {
         indicator = document.createElement('div');
         indicator.id = 'update-indicator';
-        indicator.style.cssText = `
-            position: fixed;
-            bottom: 10px;
-            left: 10px;
-            font-size: 10px;
-            color: #999;
-            z-index: 100;
-            font-family: monospace;
-        `;
+        indicator.style.cssText = 'position: fixed; bottom: 10px; left: 10px; font-size: 10px; color: #999; z-index: 100; font-family: monospace;';
         document.body.appendChild(indicator);
     }
-    
-    const time = state.lastUpdateCheck ? state.lastUpdateCheck.toLocaleTimeString() : 'Never';
-    indicator.textContent = `Last update check: ${time}`;
+    const time = state.lastUpdateCheck ? state.lastUpdateCheck.toLocaleTimeString() : 'never';
+    indicator.textContent = `v${state.currentVersion} \u00b7 files checked: ${time}`;
 }
-
-// Load cached content on page startup (for offline capability)
-function loadCachedContent() {
-    // Check if we have cached content in localStorage
-    const cachedJS = localStorage.getItem('pricechecker_js_content');
-    const cachedCSS = localStorage.getItem('pricechecker_css_content');
-    
-    if (cachedCSS) {
-        // Apply cached CSS immediately
-        const styleElement = document.createElement('style');
-        styleElement.id = 'cached-styles';
-        styleElement.textContent = cachedCSS;
-        document.head.appendChild(styleElement);
-        console.log('Loaded cached CSS');
-    }
-    
-    // Note: Cached JS is already running if this code is executing
-    // This function is mainly for applying cached CSS
-}
-
-// Call this at the very start
-loadCachedContent();
 
 // ============================================
 // ORIGINAL PRICE CHECKER FUNCTIONALITY
@@ -561,7 +268,9 @@ async function buildSlideshow() {
     if (loc) {
         console.log(`Looking for ${loc}_Slide1${CONFIG.SLIDE_EXT} ... in distribution repo`);
         availableSlides = await collectSlides(CONFIG.SLIDES_REMOTE,
-            [`${loc}_Slide`, `${loc}_SLIDE`, `${loc}_slide`]);
+            // include lowercase-location casings too (ranau_slide1.jpg was a real upload)
+            [`${loc}_Slide`, `${loc}_SLIDE`, `${loc}_slide`,
+             `${loc.toLowerCase()}_slide`, `${loc.toLowerCase()}_Slide`]);
         if (availableSlides.length) console.log(`Using ${availableSlides.length} slide(s) for outlet ${loc}`);
     }
 
@@ -1064,9 +773,58 @@ function buildQtyText(minQty, maxQty, uom) {
     return `${text} ${uom || 'unit'}(s)`;
 }
 
+// ── Price pending review (outlet has no price for this item) ───
+// RANAU/RANAU2 price only from ItemUOM.Price2. When that is empty the API
+// sends priceUnavailable=true and NO figures at all - we must show nothing
+// rather than the other outlets' price, which the till here would not charge.
+function showPricePendingReview(product) {
+    ['normalPriceBox', 'promoPriceBox', 'memberPriceBox', 'promoQuantity',
+     'memberQuantity', 'promoValidity'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+    });
+
+    const section = document.querySelector('.price-section');
+    if (!section) return;
+
+    let box = document.getElementById('pricePendingBox');
+    if (!box) {
+        box = document.createElement('div');
+        box.id = 'pricePendingBox';
+        box.className = 'price-box';
+        box.style.cssText =
+            'display:block;background:#fff8e1;border-left:6px solid #f59e0b;' +
+            'border-radius:8px;padding:18px 20px;text-align:center;';
+        box.innerHTML =
+            '<div style="font-size:1.35rem;font-weight:700;color:#92400e;margin-bottom:6px;">' +
+            '<i class="fas fa-hourglass-half" style="margin-right:8px;"></i>Harga belum tersedia</div>' +
+            '<div style="font-size:1rem;color:#92400e;">Sila tanya staf / Please ask our staff</div>';
+        section.appendChild(box);
+    }
+    box.style.display = 'block';
+
+    console.warn(`\u23f3 No price for ${product.ItemCode} at this outlet ` +
+        `(${product.PriceColumn || 'Price2 empty'}) - showing pending review.`);
+}
+
+function hidePricePendingReview() {
+    const box = document.getElementById('pricePendingBox');
+    if (box) box.style.display = 'none';
+    const normalBox = document.getElementById('normalPriceBox');
+    if (normalBox) normalBox.style.display = '';
+}
+
 // Display Pricing - FIXED to show promo even when price equals normal but has minQty
 function displayPricing(product) {
     console.log('=== displayPricing called ===');
+
+    // Outlet has no price for this item - show the pending-review panel only.
+    if (product.PriceUnavailable === true || product.PriceUnavailable === 'True') {
+        showPricePendingReview(product);
+        console.log('=== displayPricing complete (pending review) ===');
+        return;
+    }
+    hidePricePendingReview();
 
     const normalPrice = parseFloat(product.NormalPrice) || 0;
     const promoPrice = parseFloat(product.PromoPrice) || 0;
