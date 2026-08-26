@@ -92,7 +92,7 @@ const state = {
     barcodeBuffer: '',
     barcodeTimeout: null,
     updateCheckInterval: null,
-    currentVersion: '1.8.3', // Increment this with each update
+    currentVersion: '1.8.6', // Increment this with each update
     lastUpdateCheck: null,
     kioskLocation: null      // outlet code from /api/pricechecker/info (e.g. TUARAN3)
 };
@@ -157,10 +157,29 @@ async function checkLocalVersion() {
         state.lastUpdateCheck = new Date();
         updateLastCheckTime();
 
-        if (v.version && compareVersions(v.version, state.currentVersion) > 0) {
-            console.log(`Host updated to v${v.version} (running v${state.currentVersion}) - reloading to pick it up.`);
-            window.location.reload();
+        if (!v.version || compareVersions(v.version, state.currentVersion) <= 0) return;
+
+        // LOOP GUARD. The no-loop promise holds only while version.json and
+        // pricechecker.js on disk carry the SAME version. A release that bumps
+        // version.json but not the JS (easy to do by hand) breaks that: the page
+        // reloads, still reads the old version out of the JS, and reloads again
+        // forever. Remember what we already reloaded for - sessionStorage
+        // survives the reload but not a new tab.
+        let already = null;
+        try { already = sessionStorage.getItem('reloadedForVersion'); } catch (e) { }
+
+        if (already === v.version) {
+            console.error(
+                `\u26a0 Version mismatch on this host: version.json says ${v.version} but ` +
+                `pricechecker.js reports ${state.currentVersion}. Already reloaded once - ` +
+                `refusing to loop. Re-publish so BOTH files carry the same version ` +
+                `(use release.ps1).`);
+            return;
         }
+
+        try { sessionStorage.setItem('reloadedForVersion', v.version); } catch (e) { }
+        console.log(`Host updated to v${v.version} (running v${state.currentVersion}) - reloading to pick it up.`);
+        window.location.reload();
     } catch (e) {
         // version.json unreachable - try again next cycle
     }
